@@ -13,6 +13,7 @@ import {
 import { supabase } from '../services/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 import { LanguageType, translations } from '../utils/translations'; // 🚀 შემოტანილია ენის მხარდაჭერა
+import EmptyState from './EmptyState';
 
 interface Props {
   onBack: () => void;
@@ -25,8 +26,7 @@ export default function IncomingRequestsView({ onBack, onAcceptSuccess }: Props)
   
   // 🚀 ენის დინამიური წამოღება გლობალური სთორიდან
   const language = useAuthStore((state: any) => state.language) || 'ka';
-  const t = translations[language as LanguageType] || translations.ka;
-
+const t: any = translations[language as LanguageType] || translations.ka;
   const [loading, setLoading] = useState(true);
   const [groupedRequests, setGroupedRequests] = useState<any[]>([]);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
@@ -132,7 +132,6 @@ export default function IncomingRequestsView({ onBack, onAcceptSuccess }: Props)
         .from('chats')
         .insert([
           {
-            id: request.id,
             job_id: request.job_id,
             client_id: userId,
             freelancer_id: request.applicant_id, 
@@ -183,12 +182,11 @@ export default function IncomingRequestsView({ onBack, onAcceptSuccess }: Props)
       {loading ? (
         <ActivityIndicator size="large" color="#5B42F5" style={styles.listLoader} />
       ) : groupedRequests.length === 0 ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 }}>
-          <Ionicons name="mail-open-outline" size={48} color={theme.subText} style={{ marginBottom: 12 }} />
-          <Text style={{ color: theme.subText, textAlign: 'center', fontSize: 14, fontWeight: '500' }}>
-            {t.no_requests_found || 'თქვენს განცხადებებზე ახალი მოთხოვნები არ მოიძებნა'}
-          </Text>
-        </View>
+        <EmptyState
+          icon="mail-open-outline"
+          title={t.no_requests_found || 'ახალი მოთხოვნები არ არის'}
+          subtitle="როცა ვინმე შენს განცხადებას გამოეხმაურება, აქ გამოჩნდება"
+        />
       ) : (
         <ScrollView contentContainerStyle={styles.listScrollContent} showsVerticalScrollIndicator={false}>
           {groupedRequests.map((group) => {
@@ -288,5 +286,9 @@ const styles = StyleSheet.create({
   ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   ratingText: { fontSize: 11, marginLeft: 4, fontWeight: '600' },
   actionButtonsRow: { flexDirection: 'row', gap: 8 },
-  actionIconCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' }
+  actionIconCircle: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  segmentRow: { flexDirection: 'row', backgroundColor: 'rgba(127,127,127,0.12)', borderRadius: 12, padding: 4, marginTop: 14, gap: 4 },
+  segmentBtn: { flex: 1, height: 36, borderRadius: 9, justifyContent: 'center', alignItems: 'center' },
+  segmentBtnActive: { backgroundColor: '#5B42F5' },
+  segmentText: { fontSize: 13, fontWeight: '600' }
 });

@@ -49,7 +49,7 @@ export default function FilteredJobsView({ category, onBack }: FilteredJobsViewP
   const loadCategoryJobs = async () => {
     try {
       setLoading(true);
-      let query = supabase.from('jobs').select('*');
+      let query = supabase.from('jobs').select('*').or('status.is.null,status.eq.active');
 
       // 1. ფილტრაცია კატეგორიის მიხედვით
       if (category === 'company') query = query.eq('type', 'company');
@@ -85,7 +85,9 @@ export default function FilteredJobsView({ category, onBack }: FilteredJobsViewP
 
       // თუ ბაზა ცარიელია, ვიყენებთ ლოკალურ სატესტო მონაცემებს
       if (data && data.length > 0) {
-        setJobs(data);
+        const { data: blk } = await supabase.rpc('my_blocked_ids');
+        const bset = new Set((blk || []).map((b: any) => b));
+        setJobs((data || []).filter((j: any) => !bset.has(j.author_id)));
       } else {
         // სატესტო ფილტრაცია იდენტური ლოგიკით
         const filteredMock = mockJobs.filter(j => {

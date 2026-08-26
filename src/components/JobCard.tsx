@@ -14,7 +14,9 @@ import {
 } from 'react-native';
 import { supabase } from '../services/supabase'; // 🚀 შემოვიტანეთ Supabase ბაზასთან დასაკავშირებლად
 import { useAuthStore } from '../store/useAuthStore';
-import { LanguageType, translations } from '../utils/translations'; // 🚀 შემოტანილია ენის მხარდაჭერა
+import { THEME_PALETTES } from '../utils/bgThemes';
+import { formatBudgetRange } from '../utils/budget';
+import { LanguageType, translations } from '../utils/translations'; // 🚀
 
 interface JobCardProps {
   job: {
@@ -53,6 +55,8 @@ export default function JobCard({ job }: JobCardProps) {
 
   // ახალი სთეითი მოთხოვნის გაგზავნის ლოდინგისთვის
   const [isSendingRequest, setIsSendingRequest] = useState(false);
+  // 🔧 დაფიქსდა თუ არა უკვე გაგზავნილი მოთხოვნა
+  const [hasApplied, setHasApplied] = useState(false);
 
   // სთეითი აღწერის გაშლა/აკეცვისთვის
   const [isExpanded, setIsExpanded] = useState(false);
@@ -61,11 +65,13 @@ export default function JobCard({ job }: JobCardProps) {
   const defaultImage = 'https://www.cws.com/sites/default/files/styles/cover_medium_1500_x_/public/2024-01/Buerojob%20CWS%20Fire%20Safety%20n.png.webp?itok=ZXL95j-s';
   const [imageSrc, setImageSrc] = useState(job.image_url ? { uri: job.image_url } : { uri: defaultImage });
 
+  const bgTheme = useAuthStore((state: any) => state.bgTheme) || 'noir';
+  const palette = isDarkMode ? (THEME_PALETTES[bgTheme] || THEME_PALETTES.noir) : null;
   const theme = {
-    cardBg: isDarkMode ? '#16161a' : '#ffffff',
+    cardBg: palette ? palette.card : '#ffffff',
     text: isDarkMode ? '#fff' : '#1c1c1e',
-    subText: isDarkMode ? '#666' : '#8e8e93',
-    border: isDarkMode ? '#222227' : '#e5e5ea',
+    subText: isDarkMode ? '#8a8a92' : '#8e8e93',
+    border: palette ? palette.border : '#e5e5ea',
     tagBg: isDarkMode ? '#222227' : '#f2f2f7',
     urgentBg: isDarkMode ? '#2c1616' : '#fff5f5',
     urgentBorder: '#ff453a',
@@ -74,14 +80,7 @@ export default function JobCard({ job }: JobCardProps) {
     budgetBg: isDarkMode ? '#1e1b4b' : '#eeebff' 
   };
 
-  const formatBudget = () => {
-    if (!job.budget || job.budget === 'შეთანხმებით') return t.budget_negotiable;
-    const budgetStr = String(job.budget).trim();
-    if (budgetStr.includes('₾')) {
-      return budgetStr;
-    }
-    return `${budgetStr} ₾`;
-  };
+  const formatBudget = () => formatBudgetRange(job, t.budget_negotiable);
 
   const renderSkills = () => {
     if (!job.skills) return null;
@@ -111,6 +110,7 @@ export default function JobCard({ job }: JobCardProps) {
       if (checkError) throw checkError;
 
       if (existing && existing.length > 0) {
+        setHasApplied(true); // 🔧 ღილაკი აისახოს
         Alert.alert('ინფორმაცია 📝', 'თქვენ უკვე გამოგზავნილი გაქვთ განაცხადი ამ ვაკანსიაზე.');
         return;
       }
@@ -132,6 +132,10 @@ export default function JobCard({ job }: JobCardProps) {
 
       if (insertError) throw insertError;
 
+      // 🔧 წარმატება: ღილაკიც აისახოს და იუზერსაც ვამცნოთ
+      setHasApplied(true);
+      Alert.alert('გაგზავნილია ✅', 'თქვენი მოთხოვნა წარმატებით გაიგზავნა. დამსაქმებელი მალე გიპასუხებთ.');
+
     } catch (error: any) {
       Alert.alert('შეცდომა ❌', error.message || 'მოთხოვნის გაგზავნა ვერ მოხერხდა');
     } finally {
@@ -147,12 +151,20 @@ export default function JobCard({ job }: JobCardProps) {
     try {
       setIsReporting(true);
       Keyboard.dismiss();
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const { error } = await supabase.rpc('submit_report', {
+        p_target_type: 'job',
+        p_target_id: job.id,
+        p_reason: 'other',
+        p_comment: reportReason.trim(),
+      });
+      if (error) throw error;
+
       setIsReportModalVisible(false);
       setReportReason('');
       Alert.alert('გმადლობთ ხელშეწყობისთვის 🛡️', 'განცხადება გადაგზავნილია ადმინისტრაციასთან მოდერაციაზე.');
-    } catch (error) {
-      Alert.alert('შეცდომა', 'ოპერაცია ვერ შესრულდა');
+    } catch (error: any) {
+      Alert.alert('შეცდომა', error.message || 'ოპერაცია ვერ შესრულდა');
     } finally {
       setIsReporting(false);
     }
@@ -249,12 +261,17 @@ export default function JobCard({ job }: JobCardProps) {
 
         {!isOwner && (
           <TouchableOpacity 
-            style={styles.requestButton} 
+            style={[styles.requestButton, hasApplied && styles.requestButtonApplied]} 
             onPress={handleJobRequest}
-            disabled={isSendingRequest}
+            disabled={isSendingRequest || hasApplied}
           >
             {isSendingRequest ? (
               <ActivityIndicator color="#fff" size="small" />
+            ) : hasApplied ? (
+              <>
+                <Ionicons name="checkmark" size={16} color="#fff" />
+                <Text style={styles.requestButtonText}>გაგზავნილია</Text>
+              </>
             ) : (
               <>
                 <Ionicons name="paper-plane" size={16} color="#fff" />
@@ -325,6 +342,7 @@ const styles = StyleSheet.create({
   reportButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, height: 40 },
   reportButtonText: { color: '#ff453a', fontSize: 13, fontWeight: '600', marginLeft: 6 },
   requestButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B42F5', borderRadius: 12, paddingHorizontal: 20, height: 40, flex: 1, marginLeft: 12 },
+  requestButtonApplied: { backgroundColor: '#34c759' },
   requestButtonText: { color: '#fff', fontSize: 13, fontWeight: '600', marginLeft: 6 },
   modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
   modalCard: { width: '100%', padding: 24, borderRadius: 24, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 15, elevation: 10 },

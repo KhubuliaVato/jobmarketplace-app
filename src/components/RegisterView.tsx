@@ -44,8 +44,38 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
   const [confirmPassword, setConfirmPassword] = useState('');
 
   const [otpCode, setOtpCode] = useState('');
-  const TEST_OTP = '1234';
   const [loading, setLoading] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+
+  // OTP გაგზავნა Edge Function-ით
+  const sendOtp = async () => {
+    setOtpSending(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-otp', {
+        body: { phone: phone.trim(), purpose: 'register' },
+      });
+      if (error) {
+        // Edge Function-ის შეცდომის ტექსტის ამოღება
+        let msg = 'კოდის გაგზავნა ვერ მოხერხდა';
+        try {
+          const ctx = await error.context?.json();
+          if (ctx?.error) msg = ctx.error;
+        } catch {}
+        Alert.alert(t.error_alert_title || 'შეცდომა', msg);
+        return false;
+      }
+      if (data?.error) {
+        Alert.alert(t.error_alert_title || 'შეცდომა', data.error);
+        return false;
+      }
+      return true;
+    } catch (e: any) {
+      Alert.alert(t.error_alert_title || 'შეცდომა', e.message);
+      return false;
+    } finally {
+      setOtpSending(false);
+    }
+  };
 
   const theme = {
     cardBg: isDarkMode ? '#16161a' : '#ffffff',
@@ -58,35 +88,86 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
     infoText: isDarkMode ? '#ff9500' : '#b25e00'
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (regType === 'user') {
-      if (!name.trim() || !username.trim() || !phone.trim() || !password.trim() || !confirmPassword.trim()) {
+      if (!name.trim() || !username.trim() || !phone.trim() || !email.trim() || !password.trim() || !confirmPassword.trim()) {
         Alert.alert(t.error_alert_title || 'შეცდომა', t.fill_all_fields_req_error || 'გთხოვთ შეავსოთ ყველა აუცილებელი ველი');
+        return;
+      }
+      // 🔧 email-ის ფორმატი (auth login-ისთვის სავალდებულოა)
+      if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+        Alert.alert(t.error_alert_title || 'შეცდომა', t.invalid_email_error || 'ელ-ფოსტა არასწორ ფორმატშია');
+        return;
+      }
+      // 🔧 Supabase-ის მინიმალური პაროლი — 6 სიმბოლო
+      if (password.length < 6) {
+        Alert.alert(t.error_alert_title || 'შეცდომა', t.weak_password_error || 'პაროლი უნდა შეიცავდეს მინიმუმ 6 სიმბოლოს');
         return;
       }
       if (password !== confirmPassword) {
         Alert.alert(t.error_alert_title || 'შეცდომა', t.pwd_mismatch_error || 'პაროლები არ ემთხვევა ერთმანეთს');
         return;
       }
-      setRegStep('otp'); 
+      const sent = await sendOtp();
+      if (sent) setRegStep('otp');
     } else {
-      if (!name.trim() || !address.trim() || !email.trim() || !password.trim() || !confirmPassword.trim()) {
+      // 🔧 company: 4 ველი, პაროლის გარეშე
+      if (!name.trim() || !address.trim() || !email.trim() || !phone.trim()) {
         Alert.alert(t.error_alert_title || 'შეცდომა', t.fill_all_fields_req_error || 'გთხოვთ შეავსოთ ყველა აუცილებელი ველი');
         return;
       }
-      if (password !== confirmPassword) {
-        Alert.alert(t.error_alert_title || 'შეცდომა', t.pwd_mismatch_error || 'პაროლები არ ემთხვევა ერთმანეთს');
+      if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+        Alert.alert(t.error_alert_title || 'შეცდომა', t.invalid_email_error || 'ელ-ფოსტა არასწორ ფორმატშია');
         return;
       }
       executeRegistration(); 
     }
   };
 
+  // OTP-ის დადასტურება და შემდეგ რეგისტრაცია
+  const verifyAndRegister = async () => {
+    if (!/^\d{6}$/.test(otpCode)) {
+      Alert.alert(t.error_alert_title || 'შეცდომა', t.invalid_code_error || 'კოდი 6 ციფრისგან უნდა შედგებოდეს');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('verify-otp', {
+        body: { phone: phone.trim(), code: otpCode, purpose: 'register' },
+      });
+
+      let errMsg = '';
+      if (error) {
+        try {
+          const ctx = await error.context?.json();
+          errMsg = ctx?.error || 'კოდის შემოწმება ვერ მოხერხდა';
+        } catch {
+          errMsg = 'კოდის შემოწმება ვერ მოხერხდა';
+        }
+      } else if (data?.error) {
+        errMsg = data.error;
+      }
+
+      if (errMsg) {
+        Alert.alert(t.error_alert_title || 'შეცდომა', errMsg);
+        setLoading(false);
+        return;
+      }
+
+      // კოდი სწორია — ვქმნით ანგარიშს
+      await executeRegistration();
+    } catch (e: any) {
+      Alert.alert(t.error_alert_title || 'შეცდომა', e.message);
+      setLoading(false);
+    }
+  };
+  
   const executeRegistration = async () => {
     try {
       setLoading(true);
 
       if (regType === 'user') {
+        // 1. username-ის უნიკალურობა (email-ს თვითონ auth ამოწმებს)
         const { data: existingUser } = await supabase
           .from('users')
           .select('username')
@@ -99,43 +180,57 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
           return;
         }
 
-        const { data, error } = await supabase
-          .from('users')
-          .insert([{
-            name: name.trim(),
-            username: username.trim(),
-            phone: phone.trim(),
-            email: email.trim() || null,
-            password: password,
-            rating: 5.0,
-            total_earned: 0
-          }])
-          .select().single();
+        // 2. Supabase Auth რეგისტრაცია — პაროლი bcrypt-ით ინახება auth.users-ში.
+        //    trigger ავტომატურად ქმნის public.users პროფილს metadata-დან.
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password: password,
+          options: {
+            data: {
+              name: name.trim(),
+              username: username.trim(),
+              role: 'worker',
+              phone: (() => {
+                const d = phone.trim().replace(/\D/g, '');
+                return d.length === 9 ? '995' + d : d;
+              })(),
+            },
+          },
+        });
 
-        if (error) throw error;
+        if (error) {
+          const msg = /already registered|already exists/i.test(error.message)
+            ? (t.email_taken_error || 'ეს ელ-ფოსტა უკვე რეგისტრირებულია')
+            : error.message;
+          Alert.alert(t.register_error_title || 'რეგისტრაციის შეცდომა ❌', msg);
+          setRegStep('form');
+          return;
+        }
+
+        const newUserId = data.user?.id;
+        if (!newUserId) {
+          Alert.alert(t.register_error_title || 'რეგისტრაცია ❌', t.email_confirm_needed || 'სესია ვერ შეიქმნა — შეამოწმეთ Supabase-ის email-დადასტურების პარამეტრი.');
+          return;
+        }
+
         
-        // მომხმარებელი პირდაპირ შედის სისტემაში
-        setUserId(data.id);
-        setUserName(data.name || data.username);
+
+        // 4. აპში შესვლა
+        setUserId(newUserId);
+        setUserName(name.trim());
         Alert.alert(t.register_success_title || 'გილოცავთ 🎉', t.register_success_msg || 'რეგისტრაცია წარმატებით დასრულდა!');
         onSuccess();
 
       } else {
-        // ---------------- კომპანიის რეგისტრაცია ----------------
-        const generatedUsername = name.trim().toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(1000 + Math.random() * 9000);
-
+        // ---------------- კომპანიის რეგისტრაცია = მოთხოვნა (ანგარიში ჯერ არ იქმნება) ----------------
         const { error } = await supabase
-          .from('companies')
+          .from('company_requests')
           .insert([{
             company_name: name.trim(),
-            address: address.trim(),
-            username: generatedUsername,
             email: email.trim(),
-            phone: phone.trim() || null,
-            password: password,
-            rating: 5.0,
-            total_spent: 0,
-            is_verified_company: false // რეგისტრირდება დადასტურების გარეშე (false)
+            hr_phone: phone.trim(),
+            address: address.trim(),
+            status: 'pending'
           }]);
 
         if (error) throw error;
@@ -151,15 +246,12 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
   };
 
   // ნაბიჯი 1: მომხმარებლის OTP კოდის გვერდი
+  // ნაბიჯი 1: მომხმარებლის OTP კოდის გვერდი
   if (regStep === 'otp') {
     return (
       <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
         <Text style={[styles.title, { color: theme.text }]}>{t.confirm_number_title || 'დაადასტურეთ ნომერი 📱'}</Text>
         <Text style={[styles.subtitle, { color: theme.subText }]}>{t.otp_sent_msg || 'კოდი გაიგზავნა მობილურზე: '}{phone}</Text>
-
-        <View style={styles.testOtpBadge}>
-          <Text style={styles.testOtpBadgeText}>{t.test_code_label || 'ტესტ კოდი: 1234'}</Text>
-        </View>
 
         <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.sms_code_label || 'SMS კოდი'}</Text>
         <View style={[styles.inputContainer, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
@@ -169,41 +261,24 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
             placeholder={t.type_code_placeholder || "ჩაწერე კოდი..."}
             placeholderTextColor="#555"
             keyboardType="number-pad"
-            maxLength={4}
+            maxLength={6}
             value={otpCode}
             onChangeText={setOtpCode}
           />
         </View>
 
-        <TouchableOpacity style={styles.primaryButton} onPress={() => otpCode === TEST_OTP ? executeRegistration() : Alert.alert(t.error_alert_title || 'შეცდომა', t.invalid_code_error || 'არასწორი კოდი')} disabled={loading}>
+        <TouchableOpacity style={styles.primaryButton} onPress={verifyAndRegister} disabled={loading}>
           {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t.confirm_code_btn || 'კოდის დადასტურება'}</Text>}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.cancelButton} onPress={sendOtp} disabled={otpSending}>
+          <Text style={[styles.cancelButtonText, { color: '#5B42F5' }]}>
+            {otpSending ? '...' : (t.resend_code_btn || 'კოდის ხელახლა გაგზავნა')}
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.cancelButton} onPress={() => setRegStep('form')}>
           <Text style={[styles.cancelButtonText, { color: theme.subText }]}>{t.go_back_btn || 'უკან დაბრუნება'}</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // ნაბიჯი 2: კომპანიის წარმატებული რეგისტრაციის საინფორმაციო ფანჯარა
-  if (regStep === 'company_success') {
-    return (
-      <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.border, alignItems: 'center', paddingVertical: 32 }]}>
-        <View style={styles.successIconCircle}>
-          <Ionicons name="time-outline" size={36} color="#ff9500" />
-        </View>
-        
-        <Text style={[styles.title, { color: theme.text, marginTop: 16 }]}>{t.request_sent_title || 'მოთხოვნა გაგზავნილია ⏳'}</Text>
-        
-        <View style={[styles.infoBox, { backgroundColor: theme.infoBg, borderColor: theme.infoBorder, marginTop: 16, marginHorizontal: 8 }]}>
-          <Text style={[styles.infoText, { color: theme.infoText, textAlign: 'center', fontSize: 13, lineHeight: 20 }]}>
-            {t.company_pending_info || 'ჩვენი ადმინისტრაცია გამოგიგზავნით დამატებით ინფორმაციას რაც გვჭირდება თქვენი აქაუნთის დასარეგისტრირებლად მეილზე 24 საათის განმავლობაში გთხოვთ იყავით ყურადღებით.'}
-          </Text>
-        </View>
-
-        <TouchableOpacity style={[styles.primaryButton, { width: '100%', marginTop: 20 }]} onPress={onSwitchToLogin}>
-          <Text style={styles.buttonText}>{t.back_to_auth_btn || 'ავტორიზაციაზე დაბრუნება'}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -216,7 +291,7 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
 
       <View style={[styles.tabSelectorRow, { backgroundColor: theme.inputBg }]}>
         <TouchableOpacity style={[styles.tabItem, regType === 'user' && styles.tabItemActive]} onPress={() => setRegType('user')}>
-          <Text style={[styles.tabItemText, { color: theme.subText }, regType === 'user' && styles.tabItemTextActive]}>{t.user_tab || 'Mომხმარებელი'}</Text>
+          <Text style={[styles.tabItemText, { color: theme.subText }, regType === 'user' && styles.tabItemTextActive]}>{t.user_tab || 'მომხმარებელი'}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.tabItem, regType === 'company' && styles.tabItemActive]} onPress={() => setRegType('company')}>
           <Text style={[styles.tabItemText, { color: theme.subText }, regType === 'company' && styles.tabItemTextActive]}>{t.company_tab || 'კომპანია'}</Text>
@@ -249,16 +324,20 @@ export default function RegisterView({ onSuccess, onSwitchToLogin }: RegisterVie
             <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.email_required_label || 'ელ-ფოსტა *'}</Text>
             <TextInput style={[styles.regInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]} placeholder={t.company_email_placeholder || "company@ipove.ge"} placeholderTextColor="#555" keyboardType="email-address" value={email} onChangeText={setEmail} autoCapitalize="none" />
 
-            <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.phone_optional_label || 'მობილური'}</Text>
+            <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.hr_phone_label || 'HR-ის ნომერი *'}</Text>
             <TextInput style={[styles.regInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]} placeholder={t.phone_placeholder_mask || "599XXXXXX"} placeholderTextColor="#555" keyboardType="phone-pad" value={phone} onChangeText={setPhone} />
           </>
         )}
 
-        <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.password_required_label || 'პაროლი *'}</Text>
-        <TextInput style={[styles.regInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]} placeholder="••••••••" placeholderTextColor="#555" secureTextEntry={true} value={password} onChangeText={setPassword} autoCapitalize="none" />
+        {regType === 'user' && (
+          <>
+            <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.password_required_label || 'პაროლი *'}</Text>
+            <TextInput style={[styles.regInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]} placeholder="••••••••" placeholderTextColor="#555" secureTextEntry={true} value={password} onChangeText={setPassword} autoCapitalize="none" />
 
-        <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.confirm_password_required_label || 'გაიმეორეთ პაროლი *'}</Text>
-        <TextInput style={[styles.regInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]} placeholder="••••••••" placeholderTextColor="#555" secureTextEntry={true} value={confirmPassword} onChangeText={setConfirmPassword} autoCapitalize="none" />
+            <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.confirm_password_required_label || 'გაიმეორეთ პაროლი *'}</Text>
+            <TextInput style={[styles.regInput, { backgroundColor: theme.inputBg, color: theme.text, borderColor: theme.border }]} placeholder="••••••••" placeholderTextColor="#555" secureTextEntry={true} value={confirmPassword} onChangeText={setConfirmPassword} autoCapitalize="none" />
+          </>
+        )}
 
         <TouchableOpacity style={styles.primaryButton} onPress={handleSubmit} disabled={loading}>
           <Text style={styles.buttonText}>{regType === 'user' ? (t.continue_btn || 'გაგრძელება') : (t.register_action_btn || 'რეგისტრაცია')}</Text>

@@ -3,7 +3,10 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../services/supabase';
 import { useAuthStore } from '../../store/useAuthStore';
+import { THEME_PALETTES } from '../../utils/bgThemes';
+import { compareBudget } from '../../utils/budget';
 import { LanguageType, translations } from '../../utils/translations'; // 🚀 შემოტანილია ენის მხარდაჭერა
+import EmptyState from '../EmptyState';
 import JobCard from '../JobCard';
 
 interface Props { onBack: () => void; }
@@ -36,9 +39,11 @@ export default function FollowingJobsView({ onBack }: Props) {
         const followedIds = followedData?.map(f => f.followed_id) || [];
 
         if (followedIds.length > 0) {
-          const { data, error } = await supabase.from('jobs').select('*').in('author_id', followedIds);
+          const { data, error } = await supabase.from('jobs').select('*').in('author_id', followedIds).or('status.is.null,status.eq.active');
           if (error) throw error;
-          setJobs(data || []);
+          const { data: blk } = await supabase.rpc('my_blocked_ids');
+          const bset = new Set((blk || []).map((b: any) => b));
+          setJobs((data || []).filter((j: any) => !bset.has(j.author_id)));
         } else {
           setJobs([]);
         }
@@ -51,12 +56,14 @@ export default function FollowingJobsView({ onBack }: Props) {
     fetchFollowingJobs();
   }, [userId]);
 
+  const bgTheme = useAuthStore((state: any) => state.bgTheme) || 'noir';
+  const palette = isDarkMode ? (THEME_PALETTES[bgTheme] || THEME_PALETTES.noir) : null;
   const theme = {
-    bg: isDarkMode ? '#0d0d11' : '#f5f5f7',
-    cardBg: isDarkMode ? '#16161a' : '#ffffff',
+    bg: palette ? palette.bg : '#f5f5f7',
+    cardBg: palette ? palette.card : '#ffffff',
     text: isDarkMode ? '#fff' : '#1c1c1e',
-    subText: isDarkMode ? '#666' : '#8e8e93',
-    border: isDarkMode ? '#222227' : '#e5e5ea',
+    subText: isDarkMode ? '#8a8a92' : '#8e8e93',
+    border: palette ? palette.border : '#e5e5ea',
     searchBg: isDarkMode ? '#222227' : '#e5e5ea',
   };
 
@@ -81,8 +88,8 @@ export default function FollowingJobsView({ onBack }: Props) {
     return filtered.sort((a, b) => {
       if (sortBy === 'date_desc') return getJobTime(b) - getJobTime(a);
       if (sortBy === 'date_asc') return getJobTime(a) - getJobTime(b);
-      if (sortBy === 'budget_asc') return getNumericBudget(a.budget) - getNumericBudget(b.budget);
-      if (sortBy === 'budget_desc') return getNumericBudget(b.budget) - getNumericBudget(a.budget);
+      if (sortBy === 'budget_asc') return compareBudget(a, b, 'asc');
+      if (sortBy === 'budget_desc') return compareBudget(a, b, 'desc');
       return 0;
     });
   };
@@ -158,7 +165,11 @@ export default function FollowingJobsView({ onBack }: Props) {
           {processedJobs.length > 0 ? (
             processedJobs.map(job => <JobCard key={job.id} job={job} />)
           ) : (
-            <Text style={[styles.emptyText, { color: theme.subText }]}>{t.no_following_jobs_found || 'გამოწერილების განცხადებები არ მოიძებნა'}</Text>
+            <EmptyState
+              icon="people-outline"
+              title={t.no_following_jobs_found || 'გამოწერილების განცხადებები არ მოიძებნა'}
+              subtitle="გამოწერილი მომხმარებლების ახალი განცხადებები აქ გამოჩნდება"
+            />
           )}
         </ScrollView>
       )}

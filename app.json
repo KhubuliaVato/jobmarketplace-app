@@ -1,21 +1,24 @@
 {
   "expo": {
-    "name": "job-app",
-    "slug": "job-app",
+    "name": "FreeJob",
+    "slug": "freejob",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "jobapp",
+    "scheme": "freejob",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "supportsTablet": true,
+      "bundleIdentifier": "ge.freejob.app",
+      "buildNumber": "1"
     },
     "android": {
+      "package": "ge.freejob.app",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#5B42F5",
+        "foregroundImage": "./assets/images/adaptive_foreground.png",
+        "monochromeImage": "./assets/images/monochrome.png"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -28,17 +31,22 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
-          }
+          "backgroundColor": "#5B42F5",
+          "image": "./assets/images/adaptive_foreground.png",
+          "imageWidth": 140
         }
       ],
       "expo-font",
       "expo-web-browser",
       "expo-image",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-sharing",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "მიკროფონზე წვდომა საჭიროა ხმოვანი შეტყობინებისთვის"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -12,7 +12,6 @@ import {
 import { supabase } from '../services/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 import { LanguageType, translations } from '../utils/translations'; // 🚀 შემოტანილია ენის მხარდაჭერა
-
 interface LoginViewProps {
   onSuccess: () => void;
   onSwitchToRegister: () => void;
@@ -22,17 +21,76 @@ export default function LoginView({ onSuccess, onSwitchToRegister }: LoginViewPr
   const isDarkMode = useAuthStore((state) => state.isDarkMode);
   const setUserId = useAuthStore((state) => state.setUserId);
   const setUserName = useAuthStore((state) => state.setUserName);
-
+  const setMustChangePassword = useAuthStore((state) => state.setMustChangePassword);
+  const setUserRole = useAuthStore((state) => state.setUserRole);   // ✅ შიგნით
   // 🚀 ენის დინამიური წამოღება გლობალური სთორიდან
   const language = useAuthStore((state: any) => state.language) || 'ka';
   
   // 🚀 დაზღვეულია any-ით, რათა TypeScript-ის ტიპების კონფლიქტი გამოირიცხოს 100%-ით
   const t: any = translations[language as LanguageType] || translations.ka;
 
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState(''); // 🔧 username → email
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [secureText, setSecureText] = useState(true);
+
+  // პაროლის აღდგენა
+  const [mode, setMode] = useState<'login' | 'reset'>('login');
+  const [resetStep, setResetStep] = useState<'phone' | 'code'>('phone');
+  const [resetPhone, setResetPhone] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [resetNewPass, setResetNewPass] = useState('');
+  const [resetSending, setResetSending] = useState(false);
+
+  const sendResetOtp = async () => {
+    if (!resetPhone.trim()) {
+      Alert.alert(t.error_alert_title || 'შეცდომა', 'ჩაწერე ნომერი');
+      return;
+    }
+    setResetSending(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-otp', {
+        body: { phone: resetPhone.trim(), purpose: 'reset' },
+      });
+      let msg = '';
+      if (error) {
+        try { const ctx = await error.context?.json(); msg = ctx?.error || 'კოდი ვერ გაიგზავნა'; } catch { msg = 'კოდი ვერ გაიგზავნა'; }
+      } else if (data?.error) msg = data.error;
+      if (msg) { Alert.alert(t.error_alert_title || 'შეცდომა', msg); return; }
+      setResetStep('code');
+    } finally {
+      setResetSending(false);
+    }
+  };
+
+  const confirmReset = async () => {
+    if (!/^\d{6}$/.test(resetCode)) {
+      Alert.alert(t.error_alert_title || 'შეცდომა', 'კოდი 6 ციფრისგან უნდა შედგებოდეს');
+      return;
+    }
+    if (resetNewPass.length < 6) {
+      Alert.alert(t.error_alert_title || 'შეცდომა', 'პაროლი უნდა შეიცავდეს მინიმუმ 6 სიმბოლოს');
+      return;
+    }
+    setResetSending(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('reset-password', {
+        body: { phone: resetPhone.trim(), code: resetCode, newPassword: resetNewPass },
+      });
+      let msg = '';
+      if (error) {
+        try { const ctx = await error.context?.json(); msg = ctx?.error || 'ვერ განახლდა'; } catch { msg = 'ვერ განახლდა'; }
+      } else if (data?.error) msg = data.error;
+      if (msg) { Alert.alert(t.error_alert_title || 'შეცდომა', msg); return; }
+
+      Alert.alert('მზადაა ✅', 'პაროლი განახლდა, ახლა შედი ახალი პაროლით');
+      setMode('login');
+      setResetStep('phone');
+      setResetPhone(''); setResetCode(''); setResetNewPass('');
+    } finally {
+      setResetSending(false);
+    }
+  };
 
   const theme = {
     cardBg: isDarkMode ? '#16161a' : '#ffffff',
@@ -41,62 +99,91 @@ export default function LoginView({ onSuccess, onSwitchToRegister }: LoginViewPr
     border: isDarkMode ? '#222227' : '#e5e5ea',
     inputBg: isDarkMode ? '#222227' : '#f2f2f7',
   };
-
   const handleLogin = async () => {
-    if (!username.trim() || !password.trim()) {
+    
+    
+    if (!email.trim() || !password.trim()) {
       Alert.alert(t.error_alert_title || 'შეცდომა', t.fill_all_fields_error || 'გთხოვთ შეავსოთ ყველა ველი');
       return;
     }
+    
 
     try {
       setLoading(true);
-      
-      // 1. ვეძებთ იუზერებში
-      let { data: userData, error: userError } = await supabase
+
+      // Supabase Auth login — პაროლს ადარებს auth.users-ში (bcrypt)
+            const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
+      });
+
+      if (error) {
+        const msg = /invalid login credentials/i.test(error.message)
+          ? (t.auth_error_sub || 'ელ-ფოსტა ან პაროლი არასწორია')
+          : error.message;
+        Alert.alert(t.auth_error_title || 'ავტორიზაციის შეცდომა ❌', msg);
+        return;
+      }
+
+      const authUserId = data.user?.id;
+      if (!authUserId) {
+        Alert.alert(t.auth_error_title || 'ავტორიზაციის შეცდომა ❌', t.auth_error_sub || 'შესვლა ვერ მოხერხდა');
+        return;
+      }
+
+      // ბანის შემოწმება
+      const { data: ban } = await supabase.rpc('check_ban_status', { p_user_id: authUserId });
+      const banInfo = Array.isArray(ban) ? ban[0] : ban;
+      if (banInfo?.banned) {
+        await supabase.auth.signOut();
+        const until = banInfo.until
+          ? `\n\nვადა: ${new Date(banInfo.until).toLocaleDateString()}-მდე`
+          : '\n\nბანი: სამუდამო';
+        const by = banInfo.banned_by ? `\nდაბლოკა: ${banInfo.banned_by}` : '';
+        Alert.alert(
+          'თქვენი ანგარიში დაბლოკილია 🚫',
+          `მიზეზი: ${banInfo.reason || 'წესების დარღვევა'}${by}${until}`
+        );
+        return;
+      }
+
+
+      // პროფილის სახელი public.users-იდან
+      // ჯერ users-ში ვეძებთ (worker)
+      const { data: profile } = await supabase
         .from('users')
-        .select('*')
-        .eq('username', username.trim())
-        .eq('password', password)
+        .select('name, username')
+        .eq('id', authUserId)
         .maybeSingle();
 
-      if (userError) throw userError;
 
-      if (userData) {
-        setUserId(userData.id);
-        setUserName(userData.name || userData.username);
-        Alert.alert(t.success_title || 'წარმატება 🎉', `${t.welcome_user_msg || 'მოგესალმებით, '}${userData.name}!`);
+      if (profile) {
+        setUserId(authUserId);
+        setUserName(profile.name || profile.username || '');
+        setUserRole('worker');
         onSuccess();
         return;
       }
 
-      // 2. ვეძებთ კომპანიებში
-      let { data: companyData, error: companyError } = await supabase
+      // თუ არ არის — კომპანიაა
+      const { data: company } = await supabase
         .from('companies')
-        .select('*')
-        .eq('username', username.trim())
-        .eq('password', password)
+        .select('company_name, must_change_password')
+        .eq('id', authUserId)
         .maybeSingle();
+    
 
-      if (companyError) throw companyError;
-
-      if (companyData) {
-        // ================= ჩაშენდა მოდერაციის ჭკვიანი ბლოკი =================
-        if (!companyData.is_verified_company) {
-          Alert.alert(
-            t.pending_account_title || 'ანგარიში მოლოდინშია ⏳',
-            t.pending_account_sub || 'თქვენი კომპანიის პროფილი ჯერ არ არის აქტიური. გთხოვთ დაელოდოთ ადმინისტრაციის დასტურს მეილზე 24 საათის განმავლობაში.'
-          );
-          return;
-        }
-
-        setUserId(companyData.id);
-        setUserName(companyData.company_name);
-        Alert.alert(t.success_title || 'წარმატება 🎉', `${t.welcome_company_msg || 'მოგესალმებით, კომპანია '}${companyData.company_name}!`);
+      if (company) {
+        setUserId(authUserId);
+        setUserName(company.company_name || '');
+        setUserRole('company');
+        setMustChangePassword(company.must_change_password === true);
         onSuccess();
         return;
       }
 
-      Alert.alert(t.auth_error_title || 'ავტორიზაციის შეცდომა ❌', t.auth_error_sub || 'მომხმარებელი ან კომპანია ამ მონაცემებით არ არსებობს');
+      Alert.alert(t.auth_error_title || 'შეცდომა', 'პროფილი ვერ მოიძებნა');
+
     } catch (error: any) {
       Alert.alert(t.error_alert_title || 'შეცდომა ❌', error.message || (t.system_error_fallback || 'სისტემური ხარვეზი'));
     } finally {
@@ -104,20 +191,96 @@ export default function LoginView({ onSuccess, onSwitchToRegister }: LoginViewPr
     }
   };
 
+  // პაროლის აღდგენის ეკრანი
+  if (mode === 'reset') {
+    return (
+      <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
+        <Text style={[styles.title, { color: theme.text }]}>პაროლის აღდგენა 🔑</Text>
+
+        {resetStep === 'phone' ? (
+          <>
+            <Text style={[styles.subtitle, { color: theme.subText }]}>ჩაწერე ნომერი, გამოგიგზავნით კოდს</Text>
+
+            <Text style={[styles.inputLabel, { color: theme.subText }]}>მობილურის ნომერი</Text>
+            <View style={[styles.inputContainer, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
+              <Ionicons name="call-outline" size={18} color={theme.subText} style={styles.inputIcon} />
+              <TextInput
+                style={[styles.input, { color: theme.text }]}
+                placeholder="599XXXXXX"
+                placeholderTextColor={isDarkMode ? '#555' : '#aaa'}
+                value={resetPhone}
+                onChangeText={setResetPhone}
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <TouchableOpacity style={styles.loginButton} onPress={sendResetOtp} disabled={resetSending}>
+              {resetSending ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginButtonText}>კოდის გაგზავნა</Text>}
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.subtitle, { color: theme.subText }]}>კოდი გაიგზავნა: {resetPhone}</Text>
+
+            <Text style={[styles.inputLabel, { color: theme.subText }]}>SMS კოდი</Text>
+            <View style={[styles.inputContainer, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
+              <Ionicons name="keypad-outline" size={18} color={theme.subText} style={styles.inputIcon} />
+              <TextInput
+                style={[styles.input, { color: theme.text }]}
+                placeholder="6-ნიშნა კოდი"
+                placeholderTextColor={isDarkMode ? '#555' : '#aaa'}
+                value={resetCode}
+                onChangeText={setResetCode}
+                keyboardType="number-pad"
+                maxLength={6}
+              />
+            </View>
+
+            <Text style={[styles.inputLabel, { color: theme.subText }]}>ახალი პაროლი</Text>
+            <View style={[styles.inputContainer, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
+              <Ionicons name="lock-closed-outline" size={18} color={theme.subText} style={styles.inputIcon} />
+              <TextInput
+                style={[styles.input, { color: theme.text }]}
+                placeholder="••••••••"
+                placeholderTextColor={isDarkMode ? '#555' : '#aaa'}
+                value={resetNewPass}
+                onChangeText={setResetNewPass}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+            </View>
+
+            <TouchableOpacity style={styles.loginButton} onPress={confirmReset} disabled={resetSending}>
+              {resetSending ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginButtonText}>პაროლის განახლება</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.switchModeButton} onPress={sendResetOtp} disabled={resetSending}>
+              <Text style={styles.switchModeAccent}>კოდის ხელახლა გაგზავნა</Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        <TouchableOpacity style={styles.switchModeButton} onPress={() => { setMode('login'); setResetStep('phone'); }}>
+          <Text style={[styles.switchModeText, { color: theme.subText }]}>უკან შესვლაზე</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
   return (
     <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.border }]}>
       <Text style={[styles.title, { color: theme.text }]}>{t.welcome_back || 'მოგესალმებით 👋'}</Text>
       <Text style={[styles.subtitle, { color: theme.subText }]}>{t.login_subtitle || 'შედით თქვენს IPove ანგარიშზე'}</Text>
 
-      <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.username_label || 'მომხმარებლის სახელი (Username)'}</Text>
+      <Text style={[styles.inputLabel, { color: theme.subText }]}>{t.email_label || 'ელ-ფოსტა'}</Text>
       <View style={[styles.inputContainer, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
-        <Ionicons name="person-outline" size={18} color={theme.subText} style={styles.inputIcon} />
+        <Ionicons name="mail-outline" size={18} color={theme.subText} style={styles.inputIcon} />
         <TextInput
           style={[styles.input, { color: theme.text }]}
-          placeholder={t.username_placeholder || "ჩაწერე იუზერნეიმი..."}
+          placeholder={t.email_placeholder_ex || "example@gmail.com"}
           placeholderTextColor={isDarkMode ? '#555' : '#aaa'}
-          value={username}
-          onChangeText={setUsername}
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
           autoCapitalize="none"
         />
       </View>
@@ -141,6 +304,10 @@ export default function LoginView({ onSuccess, onSwitchToRegister }: LoginViewPr
 
       <TouchableOpacity style={styles.loginButton} onPress={handleLogin} disabled={loading}>
         {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginButtonText}>{t.login_btn_text || 'სისტემაში შესვლა'}</Text>}
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.switchModeButton} onPress={() => setMode('reset')}>
+        <Text style={styles.switchModeAccent}>{t.forgot_password || 'პაროლი დამავიწყდა?'}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.switchModeButton} onPress={onSwitchToRegister}>

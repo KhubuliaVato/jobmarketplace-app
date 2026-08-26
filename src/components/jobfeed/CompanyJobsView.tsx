@@ -3,8 +3,12 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../services/supabase';
 import { useAuthStore } from '../../store/useAuthStore';
+import { THEME_PALETTES } from '../../utils/bgThemes';
+import { compareBudget } from '../../utils/budget';
 import { LanguageType, translations } from '../../utils/translations'; // 🚀 შემოტანილია ენის მხარდაჭერა
-import JobCard from '../JobCard';
+import VacancyCard from '../VacancyCard';
+import VacancyDetailView from '../VacancyDetailView';
+
 
 interface Props { onBack: () => void; }
 
@@ -31,9 +35,23 @@ export default function CompanyJobsView({ onBack }: Props) {
     const fetchCompanyJobs = async () => {
       try {
         setLoading(true);
-        const { data, error } = await supabase.from('jobs').select('*').eq('type', 'company');
+        const { data, error } = await supabase.from('jobs').select('*').eq('type', 'company').or('status.is.null,status.eq.active');
         if (error) throw error;
-        setJobs(data || []);
+
+        const ids = [...new Set((data || []).map((j: any) => j.author_id).filter(Boolean))];
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, name, avatar_url')
+          .in('id', ids);
+
+        const map: any = {};
+        (profs || []).forEach((p: any) => { map[p.id] = p; });
+
+        const { data: blocked } = await supabase.rpc('my_blocked_ids');
+        const blockedSet = new Set((blocked || []).map((b: any) => b));
+        const visible = (data || []).filter((j: any) => !blockedSet.has(j.author_id));
+
+        setJobs(visible.map((j: any) => ({ ...j, company: map[j.author_id] })));
       } catch (err) {
         console.log('კომპანიის ვაკანსიების ჩატვირთვის ხარვეზი:', err);
       } finally {
@@ -43,12 +61,14 @@ export default function CompanyJobsView({ onBack }: Props) {
     fetchCompanyJobs();
   }, []);
 
+  const bgTheme = useAuthStore((state: any) => state.bgTheme) || 'noir';
+  const palette = isDarkMode ? (THEME_PALETTES[bgTheme] || THEME_PALETTES.noir) : null;
   const theme = {
-    bg: isDarkMode ? '#0d0d11' : '#f5f5f7',
-    cardBg: isDarkMode ? '#16161a' : '#ffffff',
+    bg: palette ? palette.bg : '#f5f5f7',
+    cardBg: palette ? palette.card : '#ffffff',
     text: isDarkMode ? '#fff' : '#1c1c1e',
-    subText: isDarkMode ? '#666' : '#8e8e93',
-    border: isDarkMode ? '#222227' : '#e5e5ea',
+    subText: isDarkMode ? '#8a8a92' : '#8e8e93',
+    border: palette ? palette.border : '#e5e5ea',
     searchBg: isDarkMode ? '#222227' : '#e5e5ea',
   };
 
@@ -73,12 +93,12 @@ export default function CompanyJobsView({ onBack }: Props) {
     return filtered.sort((a, b) => {
       if (sortBy === 'date_desc') return getJobTime(b) - getJobTime(a);
       if (sortBy === 'date_asc') return getJobTime(a) - getJobTime(b);
-      if (sortBy === 'budget_asc') return getNumericBudget(a.budget) - getNumericBudget(b.budget);
-      if (sortBy === 'budget_desc') return getNumericBudget(b.budget) - getNumericBudget(a.budget);
+      if (sortBy === 'budget_asc') return compareBudget(a, b, 'asc');
+      if (sortBy === 'budget_desc') return compareBudget(a, b, 'desc');
       return 0;
     });
   };
-
+  const [selectedJob, setSelectedJob] = useState<any>(null);
   const processedJobs = getProcessedJobs();
 
   return (
@@ -148,12 +168,18 @@ export default function CompanyJobsView({ onBack }: Props) {
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {processedJobs.length > 0 ? (
-            processedJobs.map(job => <JobCard key={job.id} job={job} />)
-          ) : (
+          processedJobs.map(job => (
+              <VacancyCard key={job.id} job={job} onPress={() => setSelectedJob(job)} />
+            ))        ) : (
             <Text style={[styles.emptyText, { color: theme.subText }]}>{t.no_company_jobs_found || 'კომპანიების ვაკანსიები არ მოიძებნა'}</Text>
           )}
         </ScrollView>
       )}
+      <VacancyDetailView
+        job={selectedJob}
+        visible={!!selectedJob}
+        onClose={() => setSelectedJob(null)}
+      />
     </View>
   );
 }

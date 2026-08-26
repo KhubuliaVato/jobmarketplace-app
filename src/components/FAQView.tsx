@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAuthStore } from '../store/useAuthStore';
+import { THEME_PALETTES } from '../utils/bgThemes';
 import { LanguageType, translations } from '../utils/translations';
 
 interface FAQViewProps {
@@ -18,12 +19,14 @@ export default function FAQView({ onBack }: FAQViewProps) {
   // აკორდეონისთვის გახსნილი კითხვის ინდექსის სთეითი
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
+  const bgTheme = useAuthStore((state: any) => state.bgTheme) || 'noir';
+  const palette = isDarkMode ? (THEME_PALETTES[bgTheme] || THEME_PALETTES.noir) : null;
   const theme = {
-    bg: isDarkMode ? '#0d0d11' : '#f5f5f7',
-    cardBg: isDarkMode ? '#16161a' : '#ffffff',
+    bg: palette ? palette.bg : '#f5f5f7',
+    cardBg: palette ? palette.card : '#ffffff',
     text: isDarkMode ? '#fff' : '#1c1c1e',
-    subText: isDarkMode ? '#666' : '#8e8e93',
-    border: isDarkMode ? '#222227' : '#e5e5ea',
+    subText: isDarkMode ? '#8a8a92' : '#8e8e93',
+    border: palette ? palette.border : '#e5e5ea',
     accent: '#5B42F5'
   };
 

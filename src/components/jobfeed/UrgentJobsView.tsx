@@ -1,10 +1,16 @@
+import { compareBudget } from '@/utils/budget';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../services/supabase';
 import { useAuthStore } from '../../store/useAuthStore';
+import { THEME_PALETTES } from '../../utils/bgThemes';
 import { LanguageType, translations } from '../../utils/translations'; // 🚀 შემოტანილია ენის მხარდაჭერა
+import { isExpiredUrgent } from '../../utils/urgent';
+import EmptyState from '../EmptyState';
 import JobCard from '../JobCard';
+
+
 
 interface Props { onBack: () => void; }
 type SortOption = 'date_desc' | 'date_asc' | 'budget_asc' | 'budget_desc';
@@ -25,21 +31,20 @@ export default function UrgentJobsView({ onBack }: Props) {
   const [sortBy, setSortBy] = useState<SortOption>('date_desc');
   const [isSortOpen, setIsSortOpen] = useState(false);
 
-  const mockUrgentJobs = [
-    { id: 'urg_1', title: 'სასწრაფოდ მესაჭიროება ავტო-ელექტრიკი / ჟეშტიანჩიკი 🚗', description: 'გზაზე გამიჩერდა მანქანა, დენი სრულად გაქრა. მესაჭიროება ხელოსანი ადგილზე მოსვლით რაც შეიძლება სწრაფად!', location: 'თბილისი, საბურთალო', budget: 150, deadline: 'უახლოეს 2 საათში', skills: 'ავტო ელექტრიკა, ხელოსანი', is_urgent: true, type: 'private' },
-    { id: 'urg_2', title: 'გამისკდა წყლის შლანგი, მესაჭიროება სანტექნიკი! 🚰', description: 'ტუალეტში შლანგი გამისკდა და წყალი გადაკეტილი მაქვს, სასწრაფოდ მჭირდება ხელოსანი მილის შესაცვლელად.', location: 'თბილისი, გლდანი', budget: 80, deadline: 'სასწრაფოდ დღესვე', skills: 'სანტექნიკა, ხელოსანი', is_urgent: true, type: 'private' }
-  ];
+
 
   useEffect(() => {
     const fetchUrgentJobs = async () => {
       try {
         setLoading(true);
-        const { data, error } = await supabase.from('jobs').select('*').eq('is_urgent', true);
+        const { data, error } = await supabase.from('jobs').select('*').eq('is_urgent', true).or('status.is.null,status.eq.active');
         if (error) throw error;
-        setJobs(data && data.length > 0 ? data : mockUrgentJobs);
+        const { data: blk } = await supabase.rpc('my_blocked_ids');
+        const bset = new Set((blk || []).map((b: any) => b));
+        setJobs((data || []).filter((j: any) => !bset.has(j.author_id)));
       } catch (err) {
         console.log('სასწრაფო განცხადებების ჩატვირთვის ხარვეზი:', err);
-        setJobs(mockUrgentJobs);
+        setJobs([]);
       } finally {
         setLoading(false);
       }
@@ -47,12 +52,14 @@ export default function UrgentJobsView({ onBack }: Props) {
     fetchUrgentJobs();
   }, []);
 
+  const bgTheme = useAuthStore((state: any) => state.bgTheme) || 'noir';
+  const palette = isDarkMode ? (THEME_PALETTES[bgTheme] || THEME_PALETTES.noir) : null;
   const theme = {
-    bg: isDarkMode ? '#0d0d11' : '#f5f5f7',
-    cardBg: isDarkMode ? '#16161a' : '#ffffff',
+    bg: palette ? palette.bg : '#f5f5f7',
+    cardBg: palette ? palette.card : '#ffffff',
     text: isDarkMode ? '#fff' : '#1c1c1e',
-    subText: isDarkMode ? '#666' : '#8e8e93',
-    border: isDarkMode ? '#222227' : '#e5e5ea',
+    subText: isDarkMode ? '#8a8a92' : '#8e8e93',
+    border: palette ? palette.border : '#e5e5ea',
     searchBg: isDarkMode ? '#222227' : '#e5e5ea',
     alertBg: isDarkMode ? '#2c1616' : '#fff5f5',
     alertText: '#ff453a'
@@ -67,17 +74,17 @@ export default function UrgentJobsView({ onBack }: Props) {
 
   const getJobTime = (job: any) => {
     if (job.created_at) return new Date(job.created_at).getTime();
-    return parseInt(job.id.replace('urg_', ''), 10) || 0;
+    return 0;
   };
 
   const getProcessedJobs = () => {
-    let filtered = jobs.filter(j => j.is_urgent === true && j.title.toLowerCase().includes(searchQuery.toLowerCase()));
+    let filtered = jobs.filter(j => j.is_urgent === true && !isExpiredUrgent(j) && j.title.toLowerCase().includes(searchQuery.toLowerCase()));
     
     return filtered.sort((a, b) => {
       if (sortBy === 'date_desc') return getJobTime(b) - getJobTime(a);
       if (sortBy === 'date_asc') return getJobTime(a) - getJobTime(b);
-      if (sortBy === 'budget_asc') return getNumericBudget(a.budget) - getNumericBudget(b.budget);
-      if (sortBy === 'budget_desc') return getNumericBudget(b.budget) - getNumericBudget(b.budget);
+      if (sortBy === 'budget_asc') return compareBudget(a, b, 'asc');
+      if (sortBy === 'budget_desc') return compareBudget(a, b, 'desc');
       return 0;
     });
   };
@@ -157,7 +164,11 @@ export default function UrgentJobsView({ onBack }: Props) {
           {processedJobs.length > 0 ? (
             processedJobs.map(job => <JobCard key={job.id} job={job} />)
           ) : (
-            <Text style={[styles.emptyText, { color: theme.subText }]}>{t.no_urgent_jobs_found || 'სასწრაფო შეკვეთები ამ დროისთვის არ არის'}</Text>
+            <EmptyState
+              icon="flash-outline"
+              title={t.no_urgent_jobs_found || 'სასწრაფო შეკვეთები ამ დროისთვის არ არის'}
+              subtitle="ახალი სასწრაფო განცხადებები აქ გამოჩნდება"
+            />
           )}
         </ScrollView>
       )}
